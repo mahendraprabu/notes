@@ -742,3 +742,155 @@ $ kubectl delete -f fluentd.yaml
 Deleting a DaemonSet will also delete all the Pods being managed by that DaemonSet. Set the --cascade flag to false to ensure only the DaemonSet is deleted and not the Pods.
 
 Chapter 11. Jobs
+
+The Job Object - is responsible for creating and managing Pods defined in a template in the job specification.
+If the Pod fails before a successful termination, the job controller will create a new Pod based on the Pod template in the job specification.
+
+Two primary attributes of a job:
+- the number of job completions and 
+- the number of Pods to run in parallel
+
+
+Type	- Use case	- Behavior	- completions	- parallelism
+One shot	- Database migrations	- A single Pod running once until successful termination	1	1
+Parallel fixed completions	- Multiple Pods processing a set of work in parallel	One or more Pods running one or more times until reaching a fixed completion count	1+	1+	
+Work queue: parallel jobs	- Multiple Pods processing from a centralized work queue	One or more Pods running once until successful termination	1	2+
+
+option 1 - use kubctl run with --restart=OnFailure flag:
+$ kubectl run -i oneshot --image=gcr.io/kuar-demo/kuard-amd64:blue \
+  --restart=OnFailure --command /kuard 
+  -- --keygen-enable \
+     --keygen-exit-on-complete \
+     --keygen-num-to-gen 10
+...
+(ID 0) Workload starting
+(ID 0 1/10) Item done: SHA256:nAsUsG54XoKRkJwyN+OShkUPKew3mwq7OCc
+(ID 0 2/10) Item done: SHA256:HVKX1ANns6SgF/er1lyo+ZCdnB8geFGt0/8
+(ID 0 3/10) Item done: SHA256:irjCLRov3mTT0P0JfsvUyhKRQ1TdGR8H1jg
+(ID 0 4/10) Item done: SHA256:nbQAIVY/yrhmEGk3Ui2sAHuxb/o6mYO0qRk
+(ID 0 5/10) Item done: SHA256:CCpBoXNlXOMQvR2v38yqimXGAa/w2Tym+aI
+(ID 0 6/10) Item done: SHA256:wEY2TTIDz4ATjcr1iimxavCzZzNjRmbOQp8
+(ID 0 7/10) Item done: SHA256:t3JSrCt7sQweBgqG5CrbMoBulwk4lfDWiTI
+(ID 0 8/10) Item done: SHA256:E84/Vze7KKyjCh9OZh02MkXJGoty9PhaCec
+(ID 0 9/10) Item done: SHA256:UOmYex79qqbI1MhcIfG4hDnGKonlsij2k3s
+(ID 0 10/10) Item done: SHA256:WCR8wIGOFag84Bsa8f/9QHuKqF+0mEnCADY
+(ID 0) Workload exiting
+
+There are some things to note here:
+
+-i option - this is an interactive command. kubectl will wait until the job is running and then show the log output from the first Pod in the job.
+
+--restart=OnFailure is the option that tells kubectl to create a Job object.
+
+All of the options after -- are command-line arguments to the container image. These instruct our test server (kuard) to generate 10 4,096-bit SSH keys and then exit.
+
+Note that this job won’t show up in kubectl get jobs unless you pass the -a flag. Without this flag, kubectl hides completed jobs. 
+Delete the job before continuing:
+$ kubectl delete pods oneshot
+
+Option 2 - create one-shot job using a configuration file, as shown in Example 11-1.
+
+Example 11-1. job-oneshot.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: oneshot
+spec:
+  template:
+    spec:
+      containers:
+      - name: kuard
+        image: gcr.io/kuar-demo/kuard-amd64:blue
+        imagePullPolicy: Always
+        command:
+        - "/kuard"
+        args:
+        - "--keygen-enable"
+        - "--keygen-exit-on-complete"
+        - "--keygen-num-to-gen=10"
+      restartPolicy: OnFailure
+	  
+$ kubectl apply -f job-oneshot.yaml
+job.batch/oneshot created
+
+$ kubectl describe jobs oneshot
+$ kubectl logs oneshot-4kfdt
+
+Job object will automatically pick a unique label and use it to identify the Pods it creates.
+
+Pod failure:
+
+$ kubectl get pod -l job-name=oneshot
+NAME            READY     STATUS             RESTARTS   AGE
+oneshot-3ddk0   0/1       CrashLoopBackOff   4          3m
+
+$ kubectl delete jobs oneshot
+
+
+Modify the config file again and change the restartPolicy from OnFailure to Never. Launch this with kubectl apply -f jobs-oneshot-failure2.yaml.
+
+$ kubectl get pod -l job-name=oneshot -a
+NAME            READY     STATUS    RESTARTS   AGE
+oneshot-0wm49   0/1       Error     0          1m
+oneshot-6h9s2   0/1       Error     0          39s
+oneshot-hkzw0   1/1       Running   0          6s
+oneshot-k5swz   0/1       Error     0          28s
+oneshot-m1rdw   0/1       Error     0          19s
+oneshot-x157b   0/1       Error     0          57s
+
+By setting restartPolicy: Never we are telling the kubelet not to restart the Pod on failure, but rather just declare the Pod as failed. The Job object then notices and creates a replacement Pod. If you aren’t careful, this’ll create a lot of “junk” in your cluster. For this reason, we suggest you use restartPolicy: OnFailure so failed Pods are rerun in place.
+
+Clean this up with kubectl delete jobs oneshot.
+
+You can use liveness probes with jobs. If the liveness probe policy determines that a Pod is dead, it’ll be restarted or replaced for you.
+
+Parallelism - Example 11-3. job-parallel.yaml
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: parallel
+  labels:
+    chapter: jobs
+spec:
+  parallelism: 5
+  completions: 10
+  template:
+    metadata:
+      labels:
+        chapter: jobs
+    spec:
+      containers:
+      - name: kuard
+        image: gcr.io/kuar-demo/kuard-amd64:blue
+        imagePullPolicy: Always
+        command:
+        - "/kuard"
+        args:
+        - "--keygen-enable"
+        - "--keygen-exit-on-complete"
+        - "--keygen-num-to-gen=10"
+      restartPolicy: OnFailure
+
+$ kubectl apply -f job-parallel.yaml
+job.batch/parallel created
+
+Note parallelism and completions parameters.
+  parallelism: 5
+  completions: 10
+10 runs of the job and maximum 5 parallel running jobs at a time.
+
+
+
+Work Queues:
+kuard has a simple memory-based work queue system built in.
+
+Cleaning up
+Using labels, we can clean up all of the stuff we created in this section:
+$ kubectl delete rs,svc,job -l chapter=jobs
+
+
+CronJobs:
+
+
+
