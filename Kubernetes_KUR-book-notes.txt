@@ -24,7 +24,7 @@ You can see that this node is running the Linux OS and is running on an ARM proc
 
 The Kubernetes proxy is responsible for routing network traffic to load-balanced services in the Kubernetes cluster.
 
-kubectl get daemonSets --namespace=kube-system kube-proxy
+kubectl get daemonsets --namespace=kube-system kube-proxy
 
 Kubernetes uses namespaces to organize objects in the cluster. You can think of each namespace as a folder that holds a set of objects. 
 
@@ -892,5 +892,40 @@ $ kubectl delete rs,svc,job -l chapter=jobs
 
 CronJobs:
 
+
+
+Chapter 12. Integrating Storage Solutions and Kubernetes
+
+Example 12-1. dns-service.yaml
+kind: Service
+apiVersion: v1
+metadata:
+  name: external-database
+spec:
+  type: ExternalName
+  externalName: database.company.com
+
+When you create a service of type ExternalName, the Kubernetes DNS service is instead populated with a CNAME record that points to the external name you specified (database.company.com in this case). 
+
+Example 12-2. external-ip-service.yaml
+kind: Service
+apiVersion: v1
+metadata:
+  name: external-ip-database
+
+Given that this is an external service, the user is responsible for populating the endpoints manually with an Endpoints resource (Example 12-3).
+
+Example 12-3. external-ip-endpoints.yaml
+kind: Endpoints
+apiVersion: v1
+metadata:
+  name: external-ip-database
+subsets:
+  - addresses:
+    - ip: 192.168.0.1
+    ports:
+    - port: 3306
+
+If you have more than one IP address for redundancy, you can repeat them in the addresses array.
 
 
